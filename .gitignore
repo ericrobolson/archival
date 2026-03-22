@@ -1,0 +1,4 @@
+.archival.toml
+.*
+!.git*
+target/
