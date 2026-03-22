@@ -8,6 +8,7 @@ To install archival as a shell function you can call from any directory:
 
 ### 1. Build and install the binary
 
+Run `make install` to build and install the binary to `~/bin/archival` or manually do it:
 ```sh
 cargo build --release
 mkdir -p ~/bin

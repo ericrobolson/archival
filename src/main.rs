@@ -79,6 +79,8 @@ fn main() {
         .and_then(|p| config::Config::load(p))
         .unwrap_or_default();
 
+    cfg.save(&root);
+
     let mut ignores: Vec<String> = DEFAULT_IGNORES.iter().map(|s| s.to_string()).collect();
     ignores.extend(cfg.ignore.iter().cloned());
     ignores.extend(cli.ignore.iter().cloned());

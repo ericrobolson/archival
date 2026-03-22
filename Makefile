@@ -20,3 +20,11 @@ archival-clean:
 
 archival-test: 
 	cargo run -- . --llm-cmd "claude --print"  --verbose
+
+install:
+	cargo build --release
+	mkdir -p ~/bin
+	cp target/release/archival ~/bin/archival
+
+uninstall:
+	rm ~/bin/archival
