@@ -2,11 +2,62 @@
 
 Rust CLI that walks a codebase directory tree, hashes file contents, and recursively regenerates per-directory `.archival.INDEX.md` documents (bottom-up) when content hashes change. Eliminates doc drift by keeping summaries and their hashes local to each directory.
 
-## Install
+## Shell Integration
+
+To install archival as a shell function you can call from any directory:
+
+### 1. Build and install the binary
 
 ```sh
 cargo build --release
-# binary at ./target/release/archival
+mkdir -p ~/bin
+cp target/release/archival ~/bin/archival
+```
+
+### 2. Add the shell function
+
+Append the following to your `~/.zshrc` or `~/.bashrc`:
+
+```sh
+# Use this if you want to set the CLI args yourself
+archival() {
+  ~/bin/archival "${PWD}" "$@"
+}
+export -f archival
+
+# Use this if you want a prebuilt command with default args
+archival() {
+  ~/bin/archival "${PWD}" --llm-cmd "claude --print"  --verbose
+}
+export -f archival
+```
+
+Then reload your shell:
+
+```sh
+source ~/.zshrc  # or source ~/.bashrc
+```
+
+### 3. Shell Usage
+
+Now you can run `archival` from any project directory and it will index the current working directory:
+
+```sh
+cd ~/projects/my-app
+archival
+```
+
+This is equivalent to running `~/bin/archival ./my-app --llm-cmd "claude --print"`.
+
+## LLM Setup
+
+In your AGENTS.md or CLAUDE.md file, add the following:
+```
+# Traversal Instructions
+When traversing, look at the .archival.INDEX.md index files before reading individual files. 
+Recursively traverse the directory tree, looking at the .archival.INDEX.md index files in subfolders before reading individual files.
+If a file in a .archival.INDEX.md looks relevant, then read it. 
+Otherwise skip it. Don't load the file tree like a maniac.
 ```
 
 ## Usage
