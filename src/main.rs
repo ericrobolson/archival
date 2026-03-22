@@ -79,7 +79,8 @@ fn main() {
         .and_then(|p| config::Config::load(p))
         .unwrap_or_default();
 
-    let mut ignores = cfg.ignore.clone();
+    let mut ignores: Vec<String> = DEFAULT_IGNORES.iter().map(|s| s.to_string()).collect();
+    ignores.extend(cfg.ignore.iter().cloned());
     ignores.extend(cli.ignore.iter().cloned());
 
     let llm_cmd = cli
@@ -313,6 +314,10 @@ fn clean_summaries(root: &std::path::Path, verbose: bool) {
     for entry in walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
+        .filter_entry(|e| {
+            // Skip .git directories
+            !(e.file_type().is_dir() && e.file_name().to_string_lossy().starts_with(".git"))
+        })
         .filter_map(|e| e.ok())
     {
         if entry.file_type().is_file()
