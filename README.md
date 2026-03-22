@@ -1,6 +1,6 @@
 # Archival
 
-Rust CLI that walks a codebase directory tree, hashes file contents, and recursively regenerates per-directory `.archival.INDEX.md` documents (bottom-up) when content hashes change. Eliminates doc drift by keeping summaries and their hashes local to each directory.
+Rust CLI that walks a codebase directory tree, hashes file contents, and recursively regenerates per-directory `INDEX.md` documents (bottom-up) when content hashes change. Eliminates doc drift by keeping summaries and their hashes in a mirrored `.archival/` directory tree.
 
 ## Shell Integration
 
@@ -55,9 +55,10 @@ This is equivalent to running `~/bin/archival ./my-app --llm-cmd "claude --print
 In your AGENTS.md or CLAUDE.md file, add the following:
 ```
 # Traversal Instructions
-When traversing, look at the .archival.INDEX.md index files before reading individual files. 
-Recursively traverse the directory tree, looking at the .archival.INDEX.md index files in subfolders before reading individual files.
-If a file in a .archival.INDEX.md looks relevant, then read it. 
+Index files are stored in the .archival/ directory, which mirrors the source directory structure.
+When traversing, look at INDEX.md files in .archival/ before reading individual source files.
+For example, the index for src/ is at .archival/src/INDEX.md.
+If a file listed in an index looks relevant, then read it.
 Otherwise skip it. Don't load the file tree like a maniac.
 ```
 
@@ -82,10 +83,10 @@ archival <ROOT_DIR> --llm-cmd <COMMAND> [OPTIONS]
 | `--config <PATH>` | Path to config file |
 | `--dry-run` | Print what would be regenerated without writing |
 | `-n`, `--max-dirs <N>` | Max directories to process per run (for incremental bootstrapping) |
-| `--add-ignore <PATTERN>` | Add a glob pattern to the ignore list in `.archival.toml` |
+| `--add-ignore <PATTERN>` | Add a glob pattern to the ignore list in `.archival/archival.toml` |
 | `--list-ignores` | List all active ignore patterns and exit |
 | `--chunk` | Enable chunking for large files (splits files >5000 chars into chunks) |
-| `--clean` | Delete all generated index and instruction files, then exit |
+| `--clean` | Delete the entire `.archival/` directory, then exit |
 | `-v`, `--verbose` | Print detailed progress |
 
 ## LLM Command Examples
@@ -174,7 +175,7 @@ archival ./my-project --clean
 
 ## Config File
 
-Create `.archival.toml` in your project root:
+Config lives at `.archival/archival.toml` inside your project root:
 
 ```toml
 ignore = ["target/", ".git/", "node_modules/", "*.o"]
@@ -190,28 +191,28 @@ CLI arguments take precedence over config values.
 
 ## Extension Review
 
-On each run, archival scans the tree for file extensions. Extensions not already in `allows` or `ignore` in `.archival.toml` are presented interactively:
+On each run, archival scans the tree for file extensions. Extensions not already in `allows` or `ignore` in `.archival/archival.toml` are presented interactively:
 
 ```
 Found 3 new file extension(s) to review:
 
   *.rs — (a)llow or (i)gnore? a
-  -> allowed (saved to .archival.toml)
+  -> allowed (saved to .archival/archival.toml)
   *.o — (a)llow or (i)gnore? i
-  -> ignored (saved to .archival.toml)
+  -> ignored (saved to .archival/archival.toml)
 ```
 
 Both choices are persisted so you are only asked once per extension.
 
 ## How It Works
 
-1. **Instruction file** — Creates `.archival.INSTRUCTIONS.md` in the root with AI traversal guidance (if not already present).
-2. **Extension review** — Scans file extensions and prompts the user to allow or ignore any that aren't already categorized.
-3. **Directory scan** — Walks the tree bottom-up via the `ignore` crate, building a list of directories with their files and subdirectories. Respects `.gitignore` and ignore patterns. Skips symlinks, empty directories, zero-byte files, and all archival-owned files (`.archival.INDEX.md`, `.archival.INSTRUCTIONS.md`, `.archival.toml`).
-4. **Orphan cleanup** — Deletes index files in directories that contain no other content.
+1. **Setup** — Creates `.archival/` directory and `.archival/INSTRUCTIONS.md` with AI traversal guidance (if not already present).
+2. **Extension review** — Scans file extensions and prompts the user to allow or ignore any that aren't already categorized in `.archival/archival.toml`.
+3. **Directory scan** — Walks the tree bottom-up via the `ignore` crate, building a list of directories with their files and subdirectories. Respects `.gitignore` and ignore patterns. Skips symlinks, empty directories, zero-byte files, and archival-owned files (`INDEX.md`).
+4. **Orphan cleanup** — Deletes index files in `.archival/` for source directories that contain no content.
 5. **Leaf diff & regenerate** — Diffs leaf directories (no subdirs) and regenerates dirty ones in parallel with rayon.
 6. **Non-leaf diff & regenerate** — Re-diffs each non-leaf directory bottom-up (since leaf processing may have created new index files) and regenerates dirty ones sequentially.
-7. **Stitch** — Assembles each `.archival.INDEX.md` from a template with file bullets, subdirectory sections, and a trailing `# SYSTEM-HASHES` block.
+7. **Stitch** — Assembles each `INDEX.md` from a template with file bullets, subdirectory sections, and a trailing `# SYSTEM-HASHES` block. Index files are written to `.archival/` mirroring the source tree structure (e.g., the index for `src/` is at `.archival/src/INDEX.md`).
 
 ### Change detection
 
@@ -227,18 +228,20 @@ Both choices are persisted so you are only asked once per extension.
 
 ### Orphan cleanup
 
-If a directory contains only archival-owned files and nothing else, the index file is deleted.
+If a source directory contains only archival-owned files and nothing else, the corresponding index file in `.archival/` is deleted.
 
 ## Generated Index Format
+
+Index files are stored in `.archival/` mirroring the source tree. For example, `src/tracker/` has its index at `.archival/src/tracker/INDEX.md`:
 
 ```markdown
 <!-- Do not edit below this line. This section is auto-generated by archival. -->
 
 # src/tracker
-<!--AI: When traversing, look at .archival.INDEX.md files before reading individual files. ... -->
+<!--AI: Index files are in the .archival/ directory mirroring the source tree. Look at INDEX.md files there before reading individual source files. If a file listed looks relevant, then read it. Otherwise skip it. -->
 
-- **TrackerFile.h** — Declares binary serialization interface for tracker data.
-- **TrackerFile.cpp** — Implements little-endian i32 read/write for phrases, patterns, and songs.
+- **src/tracker/TrackerFile.h** — Declares binary serialization interface for tracker data.
+- **src/tracker/TrackerFile.cpp** — Implements little-endian i32 read/write for phrases, patterns, and songs.
 
 ## utils/
 Hex parsing, value clamping, and string formatting helpers.
@@ -260,6 +263,8 @@ make release        # release build
 make run ARGS="./my-project --llm-cmd 'claude --print'"
 make test           # run tests
 make clean          # remove build artifacts
+make install        # release build + copy to ~/bin/archival
+make uninstall      # remove ~/bin/archival
 make archival-clean # delete all generated archival files
 make archival-test  # run archival on the current project with verbose output
 ```

@@ -1,4 +1,4 @@
-use crate::constants::SUMMARY_FILENAME;
+use crate::constants::{SUMMARY_FILENAME, summary_path_for};
 use crate::differ::DiffResult;
 use crate::hasher;
 use crate::scanner::DirNode;
@@ -24,9 +24,10 @@ const SUMMARY_TEMPLATE: &str = "\
 {comment}
 
 # {title}
-<!--AI: When traversing, look at {summary-file} files before reading individual files. If a file in {summary-file} looks relevant, then read it. Otherwise skip it. Don't load the file tree like a maniac. -->
+<!--AI: Index files are in the .archival/ directory mirroring the source tree. Look at {summary-file} files there before reading individual source files. If a file listed looks relevant, then read it. Otherwise skip it. -->
 
 {files}
+
 {dirs}
 
 {ignore}
@@ -43,7 +44,7 @@ pub fn generate_summary(
     verbose: bool,
     chunk: bool,
 ) {
-    let summary_path = node.path.join(SUMMARY_FILENAME);
+    let summary_path = summary_path_for(&node.path, root);
     let rel_path = node.path.strip_prefix(root).unwrap_or(&node.path);
     let title = if rel_path.as_os_str().is_empty() {
         root.file_name()
@@ -73,6 +74,7 @@ pub fn generate_summary(
         &diff.changed_files,
         &existing_file_summaries,
         llm_cmd,
+        root,
         verbose,
         chunk,
     );
@@ -83,6 +85,7 @@ pub fn generate_summary(
         &diff.changed_dirs,
         &existing_dir_summaries,
         llm_cmd,
+        root,
         verbose,
     );
 
@@ -90,10 +93,11 @@ pub fn generate_summary(
     let mut files_section = String::new();
     for file in &node.files {
         let name = file.path.file_name().unwrap_or_default().to_string_lossy();
+        let rel = file.path.strip_prefix(root).unwrap_or(&file.path);
         if let Some(line) = file_summaries.get(name.as_ref()) {
             files_section.push_str(line);
         } else {
-            files_section.push_str(&format!("- **{}**", name));
+            files_section.push_str(&format!("- **{}**", rel.display()));
         }
         files_section.push('\n');
     }
@@ -123,6 +127,11 @@ pub fn generate_summary(
         .replace("{hashes}\n", &hashes_section)
         .replace("{summary-file}", SUMMARY_FILENAME);
 
+    if let Some(parent) = summary_path.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("warning: cannot create directory {}: {}", parent.display(), e);
+        });
+    }
     fs::write(&summary_path, &body).unwrap_or_else(|e| {
         eprintln!("warning: cannot write {}: {}", summary_path.display(), e);
     });
@@ -134,6 +143,7 @@ fn generate_file_summaries(
     changed_files: &[String],
     existing: &BTreeMap<String, String>,
     llm_cmd: &str,
+    root: &Path,
     verbose: bool,
     chunk: bool,
 ) -> BTreeMap<String, String> {
@@ -159,21 +169,30 @@ fn generate_file_summaries(
         return result;
     }
 
-    // Collect files that need summarization
-    let mut files_to_summarize: Vec<(&str, &Path)> = Vec::new();
+    // Collect files that need summarization, tracking relative paths for display
+    let mut files_to_summarize: Vec<(&str, &Path, String)> = Vec::new(); // (basename, abs_path, rel_path)
     for file in &node.files {
         let name = file.path.file_name().unwrap_or_default().to_string_lossy();
         if changed_files.iter().any(|f| f == name.as_ref()) {
+            let rel = file.path.strip_prefix(root).unwrap_or(&file.path)
+                .to_string_lossy().to_string();
             files_to_summarize.push((
                 Box::leak(name.into_owned().into_boxed_str()),
                 &file.path,
+                rel,
             ));
         }
     }
 
+    // Build a map from basename to relative path for display
+    let rel_paths: BTreeMap<String, String> = files_to_summarize
+        .iter()
+        .map(|(name, _, rel)| (name.to_string(), rel.clone()))
+        .collect();
+
     // Handle large files (chunking) individually if enabled
     let mut batch_files: Vec<(String, String)> = Vec::new(); // (name, content)
-    for (name, path) in &files_to_summarize {
+    for (name, path, rel) in &files_to_summarize {
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => {
@@ -194,7 +213,7 @@ fn generate_file_summaries(
                 println!("  Chunking large file: {}", name);
             }
             let summary = summarize_large_file(path, &content, llm_cmd, verbose);
-            result.insert(name.to_string(), format!("- **{}** — {}", name, summary));
+            result.insert(name.to_string(), format!("- **{}** — {}", rel, summary));
         } else {
             batch_files.push((name.to_string(), content));
         }
@@ -204,7 +223,8 @@ fn generate_file_summaries(
     if !batch_files.is_empty() {
         let batch_result = batch_summarize_files(&batch_files, llm_cmd, verbose);
         for (name, summary) in batch_result {
-            result.insert(name.clone(), format!("- **{}** — {}", name, summary));
+            let rel = rel_paths.get(&name).unwrap_or(&name);
+            result.insert(name.clone(), format!("- **{}** — {}", rel, summary));
         }
     }
 
@@ -332,6 +352,7 @@ fn generate_dir_summaries(
     changed_dirs: &[String],
     existing: &BTreeMap<String, String>,
     llm_cmd: &str,
+    root: &Path,
     verbose: bool,
 ) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
@@ -350,7 +371,7 @@ fn generate_dir_summaries(
             }
         }
 
-        let sub_summary_path = subdir.join(SUMMARY_FILENAME);
+        let sub_summary_path = summary_path_for(subdir, root);
         if !sub_summary_path.is_file() {
             continue;
         }

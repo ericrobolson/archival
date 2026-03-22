@@ -1,4 +1,4 @@
-use crate::constants::{ARCHIVAL_FILES, SUMMARY_FILENAME};
+use crate::constants::{ARCHIVAL_FILES, summary_path_for};
 use crate::hasher;
 use crate::scanner::DirNode;
 use std::collections::BTreeMap;
@@ -18,8 +18,8 @@ pub struct DiffResult {
 }
 
 /// Compare current file/subdir hashes against stored hashes in the existing index file.
-pub fn diff(node: &DirNode) -> DiffResult {
-    let summary_path = node.path.join(SUMMARY_FILENAME);
+pub fn diff(node: &DirNode, root: &Path) -> DiffResult {
+    let summary_path = summary_path_for(&node.path, root);
     let stored = hasher::parse_stored_hashes(&summary_path);
 
     let mut current_hashes = BTreeMap::new();
@@ -48,7 +48,7 @@ pub fn diff(node: &DirNode) -> DiffResult {
     for subdir in &node.subdirs {
         let dir_name = subdir.file_name().unwrap_or_default().to_string_lossy();
         let key = format!("dir:{}", dir_name);
-        let sub_summary = subdir.join(SUMMARY_FILENAME);
+        let sub_summary = summary_path_for(subdir, root);
 
         match hasher::hash_summary(&sub_summary) {
             Some(hash) => {
@@ -89,17 +89,21 @@ pub fn diff(node: &DirNode) -> DiffResult {
     }
 }
 
-/// Check if a directory contains only a index file and nothing else.
-pub fn is_orphan_summary(dir: &Path) -> bool {
-    let summary_path = dir.join(SUMMARY_FILENAME);
+/// Check if a source directory is empty (no files or subdirs) but still has
+/// an index file in the .archival/ mirror. Since index files are no longer
+/// stored next to source files, we just check if the source dir is empty.
+pub fn is_orphan_summary(dir: &Path, root: &Path) -> bool {
+    let summary_path = summary_path_for(dir, root);
     if !summary_path.is_file() {
         return false;
     }
-    // Check if there are any non-archival files/dirs in this directory
+    // Check if the source directory has any entries at all
     let entries: Vec<_> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
         Err(_) => return false,
     };
+    // With index files in .archival/, only ARCHIVAL_FILES that might
+    // still be in the source dir are the config and instruction files.
     !entries.iter().any(|e| {
         let name = e.file_name();
         let name = name.to_string_lossy();

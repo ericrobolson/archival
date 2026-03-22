@@ -11,7 +11,7 @@ use clap::Parser;
 use rayon::prelude::*;
 use std::fs;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Recursively generates per-directory summary docs, bottom-up.
 #[derive(Parser)]
@@ -40,11 +40,11 @@ struct Cli {
     #[arg(short = 'n', long)]
     max_dirs: Option<usize>,
 
-    /// Add a glob pattern to the ignore list in .archival.toml
+    /// Add a glob pattern to the ignore list in .archival/archival.toml
     #[arg(long)]
     add_ignore: Option<String>,
 
-    /// List all active ignore patterns (from .gitignore, .archival.toml, and CLI)
+    /// List all active ignore patterns (from .gitignore, .archival/archival.toml, and CLI)
     #[arg(long)]
     list_ignores: bool,
 
@@ -90,8 +90,13 @@ fn main() {
         .as_deref()
         .or(cfg.llm_cmd.as_deref());
 
-    // Create instruction file
-    let instruction_file = root.join(INSTRUCTION_FILENAME);
+    // Create instruction file inside .archival/
+    let archival_dir = root.join(ARCHIVAL_DIR);
+    fs::create_dir_all(&archival_dir).unwrap_or_else(|e| {
+        eprintln!("error: cannot create .archival directory: {}", e);
+        std::process::exit(1);
+    });
+    let instruction_file = archival_dir.join(INSTRUCTION_FILENAME);
     if !instruction_file.is_file() {
         let contents = INSTRUCTION_FILE_CONTENTS.replace("{summary-file}", SUMMARY_FILENAME);
         fs::write(&instruction_file, contents).unwrap();
@@ -100,7 +105,6 @@ fn main() {
     // Handle --clean: delete all summary files and exit
     if cli.clean {
         clean_summaries(&root, cli.verbose);
-        fs::remove_file(instruction_file).unwrap();        
         return;
     }
 
@@ -118,7 +122,7 @@ fn main() {
 
     // Require llm_cmd for actual indexing
     let llm_cmd = llm_cmd.unwrap_or_else(|| {
-        eprintln!("error: --llm-cmd is required (or set llm_cmd in .archival.toml)");
+        eprintln!("error: --llm-cmd is required (or set llm_cmd in .archival/archival.toml)");
         std::process::exit(1);
     });
 
@@ -136,10 +140,26 @@ fn main() {
         println!("Found {} directories to check.", nodes.len());
     }
 
-    // Clean up orphan index files
-    for node in &nodes {
-        if differ::is_orphan_summary(&node.path) {
-            let orphan = node.path.join(SUMMARY_FILENAME);
+    // Clean up orphan index files in .archival/
+    if archival_dir.is_dir() {
+        let orphan_indices: Vec<_> = walkdir::WalkDir::new(&archival_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_type().is_file()
+                    && e.file_name().to_string_lossy() == SUMMARY_FILENAME
+            })
+            .filter(|e| {
+                // Map back to source directory
+                let index_parent = e.path().parent().unwrap();
+                let rel = index_parent.strip_prefix(&archival_dir).unwrap_or(Path::new(""));
+                let source_dir = root.join(rel);
+                differ::is_orphan_summary(&source_dir, &root)
+            })
+            .map(|e| e.path().to_path_buf())
+            .collect();
+
+        for orphan in orphan_indices {
             if cli.dry_run {
                 println!("Would delete orphan: {}", orphan.display());
             } else {
@@ -160,7 +180,7 @@ fn main() {
     // 3. Diff and regenerate leaves first (parallelized).
     let mut dirty_leaves: Vec<(&scanner::DirNode, differ::DiffResult)> = Vec::new();
     for node in &leaf_nodes {
-        let diff = differ::diff(node);
+        let diff = differ::diff(node, &root);
         if diff.is_dirty {
             dirty_leaves.push((node, diff));
         }
@@ -191,7 +211,7 @@ fn main() {
     // Re-diff each one since leaf processing may have created/updated index files.
     let mut non_leaf_count = 0;
     for node in &non_leaf_nodes {
-        let diff = differ::diff(node);
+        let diff = differ::diff(node, &root);
         if !diff.is_dirty {
             continue;
         }
@@ -245,7 +265,7 @@ fn extension_is_allowed(ext: &str, allows: &[String]) -> bool {
 /// Interactively review each file extension found in the tree.
 /// Extensions already covered by an ignore or allow rule are skipped.
 /// For each remaining extension, the user chooses to allow or ignore it.
-/// Both choices are persisted to .archival.toml before continuing.
+/// Both choices are persisted to .archival/archival.toml before continuing.
 /// Returns a list of newly added ignore patterns.
 fn review_extensions(
     extensions: &[String],
@@ -286,7 +306,7 @@ fn review_extensions(
                 "a" | "allow" => {
                     let pattern = format!("*.{}", ext);
                     config::add_allow_pattern(root, &pattern);
-                    println!("  -> allowed (saved to .archival.toml)");
+                    println!("  -> allowed (saved to .archival/archival.toml)");
                     break;
                 }
                 "i" | "ignore" => {
@@ -312,29 +332,19 @@ fn review_extensions(
 }
 
 fn clean_summaries(root: &std::path::Path, verbose: bool) {
-    let mut count = 0;
-    for entry in walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            // Skip .git directories
-            !(e.file_type().is_dir() && e.file_name().to_string_lossy().starts_with(".git"))
-        })
-        .filter_map(|e| e.ok())
-    {
-        if entry.file_type().is_file()
-            && entry.file_name().to_string_lossy() == SUMMARY_FILENAME
-        {
-            let path = entry.path();
-            if verbose {
-                println!("Deleting: {}", path.display());
-            }
-            if fs::remove_file(path).is_ok() {
-                count += 1;
-            }
+    let archival_dir = root.join(ARCHIVAL_DIR);
+    if archival_dir.is_dir() {
+        if verbose {
+            println!("Deleting: {}/", archival_dir.display());
         }
+        if fs::remove_dir_all(&archival_dir).is_ok() {
+            println!("Deleted {} directory.", ARCHIVAL_DIR);
+        } else {
+            eprintln!("warning: failed to delete {}", archival_dir.display());
+        }
+    } else {
+        println!("Nothing to clean.");
     }
-    println!("Deleted {} {} file(s).", count, SUMMARY_FILENAME);
 }
 
 fn list_ignores(root: &std::path::Path, config_ignores: &[String], cli_ignores: &[String]) {
@@ -353,9 +363,9 @@ fn list_ignores(root: &std::path::Path, config_ignores: &[String], cli_ignores: 
         println!();
     }
 
-    // .archival.toml patterns
+    // .archival/archival.toml patterns
     if !config_ignores.is_empty() {
-        println!(".archival.toml:");
+        println!(".archival/archival.toml:");
         for pat in config_ignores {
             println!("  {}", pat);
         }

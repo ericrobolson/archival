@@ -121,7 +121,7 @@ pub fn parse_existing_summaries(summary_path: &Path) -> (BTreeMap<String, String
             continue;
         }
 
-        // File summary line: "- **filename** — description"
+        // File summary line: "- **path/filename** — description"
         if line.starts_with("- **") {
             // Flush any pending dir summary
             if let Some(dir_name) = current_dir.take() {
@@ -137,11 +137,22 @@ pub fn parse_existing_summaries(summary_path: &Path) -> (BTreeMap<String, String
                 .or_else(|| line.find("** -"))
             {
                 let start = 4; // skip "- **"
-                let name = &line[start..end];
-                file_summaries.insert(name.to_string(), line.to_string());
+                let bold_text = &line[start..end];
+                // Key by basename so lookups by filename still work
+                let basename = Path::new(bold_text)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                file_summaries.insert(basename, line.to_string());
             } else if let Some(end) = line[4..].find("**") {
-                let name = &line[4..4 + end];
-                file_summaries.insert(name.to_string(), line.to_string());
+                let bold_text = &line[4..4 + end];
+                let basename = Path::new(bold_text)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                file_summaries.insert(basename, line.to_string());
             }
             continue;
         }
