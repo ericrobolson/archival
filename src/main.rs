@@ -159,15 +159,20 @@ fn main() {
             .map(|e| e.path().to_path_buf())
             .collect();
 
-        for orphan in orphan_indices {
+        for orphan in &orphan_indices {
             if cli.dry_run {
                 println!("Would delete orphan: {}", orphan.display());
             } else {
                 if cli.verbose {
                     println!("Deleting orphan: {}", orphan.display());
                 }
-                let _ = fs::remove_file(&orphan);
+                let _ = fs::remove_file(orphan);
             }
+        }
+
+        // Clean up empty directories left behind in .archival/
+        if !cli.dry_run && !orphan_indices.is_empty() {
+            clean_empty_archival_dirs(&archival_dir, cli.verbose);
         }
     }
 
@@ -329,6 +334,28 @@ fn review_extensions(
     }
 
     new_ignores
+}
+
+/// Remove empty directories inside .archival/ bottom-up.
+fn clean_empty_archival_dirs(archival_dir: &std::path::Path, verbose: bool) {
+    // Collect all directories, sorted deepest-first so children are removed before parents
+    let mut dirs: Vec<PathBuf> = walkdir::WalkDir::new(archival_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_dir() && e.path() != archival_dir)
+        .map(|e| e.path().to_path_buf())
+        .collect();
+    dirs.sort_by(|a, b| {
+        let da = a.components().count();
+        let db = b.components().count();
+        db.cmp(&da)
+    });
+    for dir in dirs {
+        // Try to remove — only succeeds if empty
+        if fs::remove_dir(&dir).is_ok() && verbose {
+            println!("Removed empty archival dir: {}", dir.display());
+        }
+    }
 }
 
 fn clean_summaries(root: &std::path::Path, verbose: bool) {

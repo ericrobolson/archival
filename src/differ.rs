@@ -97,10 +97,14 @@ pub fn is_orphan_summary(dir: &Path, root: &Path) -> bool {
     if !summary_path.is_file() {
         return false;
     }
-    // Check if the source directory has any entries at all
+    // If the source directory doesn't exist at all, it's an orphan
+    if !dir.is_dir() {
+        return true;
+    }
+    // Check if the source directory has any non-archival entries
     let entries: Vec<_> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
-        Err(_) => return false,
+        Err(_) => return true,
     };
     // With index files in .archival/, only ARCHIVAL_FILES that might
     // still be in the source dir are the config and instruction files.
