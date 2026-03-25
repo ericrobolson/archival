@@ -7,8 +7,13 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 const CHUNK_SIZE: usize = 5000;
+const LLM_RATE_LIMIT: Duration = Duration::from_secs(1);
+
+static LAST_LLM_CALL: Mutex<Option<Instant>> = Mutex::new(None);
 
 
 const IGNORE_SECTION: &str = "<!--AI: Ignore the below section. It is used only for system tracking.-->";
@@ -417,7 +422,20 @@ fn generate_dir_summaries(
 }
 
 /// Invoke the LLM command with content passed via stdin.
+/// Rate-limited to at most one call per second.
 fn invoke_llm_with_stdin(llm_cmd: &str, input: &str) -> Result<String, String> {
+    // Rate limit: wait until at least LLM_RATE_LIMIT has passed since last call
+    {
+        let mut last_call = LAST_LLM_CALL.lock().unwrap();
+        if let Some(last) = *last_call {
+            let elapsed = last.elapsed();
+            if elapsed < LLM_RATE_LIMIT {
+                std::thread::sleep(LLM_RATE_LIMIT - elapsed);
+            }
+        }
+        *last_call = Some(Instant::now());
+    }
+
     let parts: Vec<&str> = llm_cmd.split_whitespace().collect();
     if parts.is_empty() {
         return Err("empty llm_cmd".to_string());
