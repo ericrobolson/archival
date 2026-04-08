@@ -195,6 +195,9 @@ fn main() {
         println!("{} leaf directories need regeneration.", dirty_leaves.len());
     }
 
+    // Count total files needing regeneration across all dirty directories
+    let leaf_file_count: usize = dirty_leaves.iter().map(|(_, diff)| diff.changed_files.len()).sum();
+
     // Apply --max-dirs limit to leaves
     if let Some(max) = cli.max_dirs {
         dirty_leaves.truncate(max);
@@ -215,12 +218,14 @@ fn main() {
     // 4. Now diff and regenerate non-leaves bottom-up.
     // Re-diff each one since leaf processing may have created/updated index files.
     let mut non_leaf_count = 0;
+    let mut non_leaf_file_count: usize = 0;
     for node in &non_leaf_nodes {
         let diff = differ::diff(node, &root);
         if !diff.is_dirty {
             continue;
         }
         non_leaf_count += 1;
+        non_leaf_file_count += diff.changed_files.len();
         generator::generate_summary(
             node,
             &diff,
@@ -238,6 +243,9 @@ fn main() {
         }
         return;
     }
+
+    let total_files = leaf_file_count + non_leaf_file_count;
+    println!("{} files need regeneration.", total_files);
 
     if cli.verbose {
         println!("{} non-leaf directories regenerated.", non_leaf_count);
