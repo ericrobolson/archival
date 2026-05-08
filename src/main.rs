@@ -131,13 +131,9 @@ fn main() {
     ignores.extend(new_ignores);
 
     // 1. Scan
-    if cli.verbose {
-        println!("Scanning {}...", root.display());
-    }
     let nodes = scanner::scan(&root, &ignores);
-    if cli.verbose {
-        println!("Found {} directories to check.", nodes.len());
-    }
+    let total_file_count: usize = nodes.iter().map(|n| n.files.len()).sum();
+    println!("Found {} files.", total_file_count);
 
     // Clean up orphan index files in .archival/
     if archival_dir.is_dir() {
@@ -190,12 +186,24 @@ fn main() {
         }
     }
 
-    if cli.verbose && !dirty_leaves.is_empty() {
-        println!("{} leaf directories need regeneration.", dirty_leaves.len());
-    }
-
-    // Count total files needing regeneration across all dirty directories
+    // Count files needing resummarization (including preliminary non-leaf check)
     let leaf_file_count: usize = dirty_leaves.iter().map(|(_, diff)| diff.changed_files.len()).sum();
+    let mut non_leaf_preliminary_dirty: usize = 0;
+    let mut non_leaf_preliminary_file_count: usize = 0;
+    for node in &non_leaf_nodes {
+        let diff = differ::diff(node, &root);
+        if diff.is_dirty {
+            non_leaf_preliminary_dirty += 1;
+            non_leaf_preliminary_file_count += diff.changed_files.len();
+        }
+    }
+    let total_needing_regen = leaf_file_count + non_leaf_preliminary_file_count;
+
+    if dirty_leaves.is_empty() && non_leaf_preliminary_dirty == 0 {
+        println!("Everything up to date.");
+        return;
+    }
+    println!("{} files need resummarization.", total_needing_regen);
 
     // Apply --max-dirs limit to leaves
     if let Some(max) = cli.max_dirs {
@@ -214,40 +222,34 @@ fn main() {
         );
     });
 
-    // 4. Now diff and regenerate non-leaves bottom-up.
+    // 4. Now diff and regenerate non-leaves bottom-up, parallelized by depth.
+    // Nodes at the same depth don't depend on each other, so they can run in parallel.
     // Re-diff each one since leaf processing may have created/updated index files.
-    let mut non_leaf_count = 0;
-    let mut non_leaf_file_count: usize = 0;
+    let mut depth_groups: BTreeMap<usize, Vec<&scanner::DirNode>> = BTreeMap::new();
     for node in &non_leaf_nodes {
-        let diff = differ::diff(node, &root);
-        if !diff.is_dirty {
-            continue;
-        }
-        non_leaf_count += 1;
-        non_leaf_file_count += diff.changed_files.len();
-        generator::generate_summary(
-            node,
-            &diff,
-            llm_cmd,
-            &root,
-            cli.dry_run,
-            cli.verbose,
-            cli.chunk,
-        );
+        let depth = node.path.components().count();
+        depth_groups.entry(depth).or_default().push(node);
     }
-
-    if dirty_leaves.is_empty() && non_leaf_count == 0 {
-        if cli.verbose {
-            println!("Everything up to date.");
-        }
-        return;
-    }
-
-    let total_files = leaf_file_count + non_leaf_file_count;
-    println!("{} files need regeneration.", total_files);
-
-    if cli.verbose {
-        println!("{} non-leaf directories regenerated.", non_leaf_count);
+    // Process deepest first (BTreeMap is ascending, so reverse)
+    for (_depth, group) in depth_groups.iter().rev() {
+        let dirty: Vec<_> = group
+            .iter()
+            .filter_map(|node| {
+                let diff = differ::diff(node, &root);
+                if diff.is_dirty { Some((*node, diff)) } else { None }
+            })
+            .collect();
+        dirty.par_iter().for_each(|(node, diff)| {
+            generator::generate_summary(
+                node,
+                diff,
+                llm_cmd,
+                &root,
+                cli.dry_run,
+                cli.verbose,
+                cli.chunk,
+            );
+        });
     }
 
     println!("Done.");

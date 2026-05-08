@@ -65,7 +65,7 @@ pub fn generate_summary(
         return;
     }
 
-    if verbose {
+    if !diff.changed_files.is_empty() || !diff.changed_dirs.is_empty() {
         println!("Regenerating: {}", summary_path.display());
     }
 
