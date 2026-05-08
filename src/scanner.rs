@@ -18,10 +18,11 @@ pub struct DirNode {
 
 /// Walk the directory tree and collect all unique file extensions (sorted).
 /// Respects .gitignore and extra ignore patterns.
+/// Returns a BTreeMap of extension -> list of sample files (up to 3 per extension).
 pub fn collect_extensions(
     root: &Path,
     extra_ignores: &[String],
-) -> Vec<String> {
+) -> BTreeMap<String, Vec<PathBuf>> {
     let mut builder = WalkBuilder::new(root);
     builder
         .follow_links(false)
@@ -37,7 +38,7 @@ pub fn collect_extensions(
         }
     }
 
-    let mut extensions = BTreeSet::new();
+    let mut extensions: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for entry in builder.build().filter_map(|e| e.ok()) {
         if entry.file_type().map_or(false, |ft| ft.is_file()) {
             let file_name = entry.file_name().to_string_lossy();
@@ -45,11 +46,15 @@ pub fn collect_extensions(
                 continue;
             }
             if let Some(ext) = entry.path().extension() {
-                extensions.insert(ext.to_string_lossy().to_string());
+                let ext_str = ext.to_string_lossy().to_string();
+                let files = extensions.entry(ext_str).or_insert_with(Vec::new);
+                if files.len() < 3 {
+                    files.push(entry.path().to_path_buf());
+                }
             }
         }
     }
-    extensions.into_iter().collect()
+    extensions
 }
 
 /// Scan the directory tree bottom-up, returning DirNodes in post-order.

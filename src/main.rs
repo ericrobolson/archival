@@ -9,6 +9,7 @@ use constants::*;
 
 use clap::Parser;
 use rayon::prelude::*;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -78,8 +79,6 @@ fn main() {
         .as_ref()
         .and_then(|p| config::Config::load(p))
         .unwrap_or_default();
-
-    cfg.save(&root);
 
     let mut ignores: Vec<String> = DEFAULT_IGNORES.iter().map(|s| s.to_string()).collect();
     ignores.extend(cfg.ignore.iter().cloned());
@@ -281,14 +280,14 @@ fn extension_is_allowed(ext: &str, allows: &[String]) -> bool {
 /// Both choices are persisted to .archival/archival.toml before continuing.
 /// Returns a list of newly added ignore patterns.
 fn review_extensions(
-    extensions: &[String],
+    extensions: &BTreeMap<String, Vec<PathBuf>>,
     ignores: &[String],
     allows: &[String],
     root: &std::path::Path,
 ) -> Vec<String> {
-    let needs_review: Vec<&String> = extensions
+    let needs_review: Vec<(&String, &Vec<PathBuf>)> = extensions
         .iter()
-        .filter(|ext| !extension_is_ignored(ext, ignores) && !extension_is_allowed(ext, allows))
+        .filter(|(ext, _)| !extension_is_ignored(ext, ignores) && !extension_is_allowed(ext, allows))
         .collect();
 
     if needs_review.is_empty() {
@@ -301,17 +300,30 @@ fn review_extensions(
     let mut reader = stdin.lock();
     let mut new_ignores = Vec::new();
 
-    for ext in &needs_review {
+    for (ext, files) in &needs_review {
+        if !files.is_empty() {
+            println!("  *.{}", ext);
+            println!("    Example files:");
+            for file in files.iter().take(3) {
+                if let Ok(rel) = file.strip_prefix(root) {
+                    println!("      {}", rel.display());
+                } else {
+                    println!("      {}", file.display());
+                }
+            }
+        } else {
+            println!("  *.{}", ext);
+        }
+
         loop {
-            print!("  *.{} — (a)llow or (i)gnore? ", ext);
+            print!("    (a)llow or (i)gnore? ");
             io::stdout().flush().unwrap();
 
             let mut input = String::new();
             if reader.read_line(&mut input).is_err() || input.is_empty() {
-                // EOF or error — default to allow
                 let pattern = format!("*.{}", ext);
                 config::add_allow_pattern(root, &pattern);
-                println!("  -> allowed");
+                println!("    -> allowed");
                 break;
             }
 
@@ -319,7 +331,7 @@ fn review_extensions(
                 "a" | "allow" => {
                     let pattern = format!("*.{}", ext);
                     config::add_allow_pattern(root, &pattern);
-                    println!("  -> allowed (saved to .archival/archival.toml)");
+                    println!("    -> allowed (saved to .archival/archival.toml)");
                     break;
                 }
                 "i" | "ignore" => {

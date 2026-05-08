@@ -29,6 +29,7 @@ export -f archival
 # Use this if you want a prebuilt command with default args
 archival() {
   # ~/bin/archival "${PWD}" --llm-cmd "claude --print"  --verbose
+  # ~/bin/archival "${PWD}" --llm-cmd "opencode run -m '$MODEL'" --verbose
   ~/bin/archival "${PWD}" --llm-cmd "claude --model sonnet --print"  --verbose
 }
 export -f archival

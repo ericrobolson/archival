@@ -20,7 +20,9 @@ pub struct Config {
 impl Config {
     pub fn load(path: &Path) -> Option<Config> {
         let content = fs::read_to_string(path).ok()?;
-        toml::from_str(&content).ok()
+        toml::from_str(&content)
+            .map_err(|e| eprintln!("Warning: Failed to parse {}: {}", path.display(), e))
+            .ok()
     }
 
     /// Find .archival/archival.toml by searching from root_dir upward.
